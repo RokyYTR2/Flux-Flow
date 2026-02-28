@@ -1,6 +1,6 @@
 [package]
 name = "flux-flow"
-version = "2026.1.0"
+version = "26.1.0"
 description = "Todo and idea planner with reminders"
 authors = ["Meyba._."]
 edition = "2021"
