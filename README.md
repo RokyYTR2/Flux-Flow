@@ -5,6 +5,10 @@ Desktop productivity app built with **Tauri + React + Rust** for managing TODOs 
 - **Personal Flow**: local data on your device (`~/.flux-flow`).
 - **Team Flow**: shared data through a Rust backend API.
 
+## Preview
+
+![Flux Flow Dashboard](./docs/dashboard.png)
+
 ## Features
 
 - TODO planner with priority, tags, reminders, due dates
