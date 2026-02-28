@@ -1,0 +1,21 @@
+[package]
+name = "flux-flow"
+version = "2026.1.0"
+description = "Todo and idea planner with reminders"
+authors = ["Meyba._."]
+edition = "2021"
+
+[lib]
+name = "flux_flow_lib"
+crate-type = ["staticlib", "cdylib", "rlib"]
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
+tauri-plugin-opener = "2"
+dirs = "5.0"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+reqwest = { version = "0.12", default-features = false, features = ["json", "blocking", "rustls-tls"] }
