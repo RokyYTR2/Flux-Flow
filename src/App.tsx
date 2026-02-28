@@ -50,6 +50,7 @@ const parseTeamSession = (value: string | null): TeamSession | null => {
       typeof parsed?.teamCode === 'string' &&
       typeof parsed?.memberId === 'string' &&
       typeof parsed?.memberName === 'string' &&
+      typeof parsed?.authToken === 'string' &&
       typeof parsed?.owner === 'boolean' &&
       typeof parsed?.memberCount === 'number'
     ) {
@@ -64,6 +65,7 @@ const parseTeamSession = (value: string | null): TeamSession | null => {
         teamCode: parsed.teamCode,
         memberId: parsed.memberId,
         memberName: parsed.memberName,
+        authToken: parsed.authToken,
         role,
         owner: parsed.owner,
         memberCount: parsed.memberCount,
@@ -193,7 +195,7 @@ const AppContent = () => {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const todosRef = useRef(todos);
   const activeTeamCode = flowMode === 'team' ? teamSession?.teamCode ?? null : null;
-  const activeTeamMemberId = flowMode === 'team' ? teamSession?.memberId ?? null : null;
+  const activeTeamAuthToken = flowMode === 'team' ? teamSession?.authToken ?? null : null;
   const activeStorageKey = useMemo(
     () => (flowMode === 'personal' ? 'personal' : activeTeamCode ? `team:${activeTeamCode}` : null),
     [flowMode, activeTeamCode]
@@ -250,10 +252,10 @@ const AppContent = () => {
             invoke<TodoItem[]>('load_todos'),
             invoke<IdeaItem[]>('load_ideas'),
           ]);
-        } else if (activeTeamCode && activeTeamMemberId) {
+        } else if (activeTeamCode && activeTeamAuthToken) {
           const context = await invoke<TeamContext>('load_team_context', {
             teamCode: activeTeamCode,
-            memberId: activeTeamMemberId,
+            authToken: activeTeamAuthToken,
           });
           if (cancelled) return;
 
@@ -263,7 +265,7 @@ const AppContent = () => {
           if (context.session.owner) {
             const activity = await invoke<TeamActivityItem[]>('load_team_activity', {
               teamCode: activeTeamCode,
-              memberId: context.session.memberId,
+              authToken: context.session.authToken,
             });
             if (!cancelled) {
               setTeamActivity(activity);
@@ -275,11 +277,11 @@ const AppContent = () => {
           [storedTodos, storedIdeas] = await Promise.all([
             invoke<TodoItem[]>('load_team_todos', {
               teamCode: activeTeamCode,
-              memberId: context.session.memberId,
+              authToken: context.session.authToken,
             }),
             invoke<IdeaItem[]>('load_team_ideas', {
               teamCode: activeTeamCode,
-              memberId: context.session.memberId,
+              authToken: context.session.authToken,
             }),
           ]);
         }
@@ -334,7 +336,7 @@ const AppContent = () => {
     return () => {
       cancelled = true;
     };
-  }, [activeStorageKey, activeTeamCode, activeTeamMemberId, flowMode, showNotification]);
+  }, [activeStorageKey, activeTeamCode, activeTeamAuthToken, flowMode, showNotification]);
 
   useEffect(() => {
     todosRef.current = todos;
@@ -344,10 +346,10 @@ const AppContent = () => {
       try {
         if (flowMode === 'personal') {
           await invoke('save_todos', { todos });
-        } else if (activeTeamCode && activeTeamMemberId) {
+        } else if (activeTeamCode && activeTeamAuthToken) {
           await invoke('save_team_todos', {
             teamCode: activeTeamCode,
-            memberId: activeTeamMemberId,
+            authToken: activeTeamAuthToken,
             todos,
           });
         }
@@ -373,7 +375,7 @@ const AppContent = () => {
     activeStorageKey,
     flowMode,
     activeTeamCode,
-    activeTeamMemberId,
+    activeTeamAuthToken,
     loadedStorageKey,
   ]);
 
@@ -384,10 +386,10 @@ const AppContent = () => {
       try {
         if (flowMode === 'personal') {
           await invoke('save_ideas', { ideas });
-        } else if (activeTeamCode && activeTeamMemberId) {
+        } else if (activeTeamCode && activeTeamAuthToken) {
           await invoke('save_team_ideas', {
             teamCode: activeTeamCode,
-            memberId: activeTeamMemberId,
+            authToken: activeTeamAuthToken,
             ideas,
           });
         }
@@ -413,7 +415,7 @@ const AppContent = () => {
     activeStorageKey,
     flowMode,
     activeTeamCode,
-    activeTeamMemberId,
+    activeTeamAuthToken,
     loadedStorageKey,
   ]);
 
@@ -460,13 +462,13 @@ const AppContent = () => {
   };
 
   const refreshTeamActivity = async () => {
-    if (flowMode !== 'team' || !activeTeamCode || !activeTeamMemberId || !teamSession?.owner) return;
+    if (flowMode !== 'team' || !activeTeamCode || !activeTeamAuthToken || !teamSession?.owner) return;
 
     setRefreshingActivity(true);
     try {
       const activity = await invoke<TeamActivityItem[]>('load_team_activity', {
         teamCode: activeTeamCode,
-        memberId: activeTeamMemberId,
+        authToken: activeTeamAuthToken,
       });
       setTeamActivity(activity);
     } catch (error) {
@@ -482,20 +484,20 @@ const AppContent = () => {
   };
 
   const handleUpdateMemberRole = async (targetMemberId: string, role: TeamRole) => {
-    if (flowMode !== 'team' || !activeTeamCode || !activeTeamMemberId || !teamSession) return;
+    if (flowMode !== 'team' || !activeTeamCode || !activeTeamAuthToken || !teamSession) return;
     if (teamSession.role !== 'owner') return;
 
     setRoleUpdateMemberId(targetMemberId);
     try {
       await invoke('update_team_member_role', {
         teamCode: activeTeamCode,
-        actorMemberId: activeTeamMemberId,
+        authToken: activeTeamAuthToken,
         targetMemberId,
         role,
       });
       const context = await invoke<TeamContext>('load_team_context', {
         teamCode: activeTeamCode,
-        memberId: activeTeamMemberId,
+        authToken: activeTeamAuthToken,
       });
       setTeamSession(context.session);
       setTeamMembers(context.members);

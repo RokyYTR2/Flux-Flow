@@ -15,6 +15,7 @@ Desktop productivity app built with **Tauri + React + Rust** for managing TODOs 
 - Ideas list with convert-to-TODO
 - Calendar + dashboard views
 - Team create/join by code
+- Session token authentication for Team API (Bearer token)
 - Team roles: **Owner / Admin / Member**
 - Task assignee support in team mode
 - Owner-only activity feed
@@ -91,15 +92,19 @@ Tauri Team backend URL env var:
 
 By default, Tauri currently points to:
 
-- `http://157.173.124.239:25578`
+- `http://127.0.0.1:25578`
 
-If you run backend locally, set:
+For production/remote backend, set:
 
 ```powershell
-$env:FLUX_FLOW_TEAM_BACKEND_URL="http://127.0.0.1:25578"
+$env:FLUX_FLOW_TEAM_BACKEND_URL="http://your-server:25578"
 ```
 
 ## Backend API (Team Flow)
+
+Protected endpoints use:
+
+- `Authorization: Bearer <auth_token>`
 
 - `GET /health`
 - `POST /api/team/create`

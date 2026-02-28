@@ -4,6 +4,7 @@ export interface TeamSession {
   teamCode: string;
   memberId: string;
   memberName: string;
+  authToken: string;
   role: TeamRole;
   owner: boolean;
   memberCount: number;

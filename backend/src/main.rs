@@ -1,5 +1,5 @@
-use axum::extract::{Path, Query, State};
-use axum::http::{Method, StatusCode};
+use axum::extract::{Path, State};
+use axum::http::{header, HeaderMap, Method, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post, put};
 use axum::{Json, Router};
@@ -82,6 +82,7 @@ struct TeamSession {
     team_code: String,
     member_id: String,
     member_name: String,
+    auth_token: String,
     role: TeamRole,
     owner: bool,
     member_count: usize,
@@ -132,6 +133,8 @@ struct TeamMember {
     name: String,
     joined_at: String,
     #[serde(default)]
+    auth_token: String,
+    #[serde(default)]
     role: TeamRole,
     #[serde(default)]
     owner: bool,
@@ -152,28 +155,19 @@ struct JoinTeamRequest {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
-struct MemberQuery {
-    member_id: String,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(rename_all = "camelCase")]
 struct SaveTodosRequest {
-    member_id: String,
     todos: Vec<TodoItem>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct SaveIdeasRequest {
-    member_id: String,
     ideas: Vec<IdeaItem>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateRoleRequest {
-    actor_member_id: String,
     role: TeamRole,
 }
 
@@ -217,6 +211,7 @@ struct AppState {
 #[derive(Debug)]
 enum ApiError {
     BadRequest(String),
+    Unauthorized(String),
     Forbidden(String),
     NotFound(String),
     Internal(String),
@@ -226,6 +221,7 @@ impl ApiError {
     fn status_code(&self) -> StatusCode {
         match self {
             ApiError::BadRequest(_) => StatusCode::BAD_REQUEST,
+            ApiError::Unauthorized(_) => StatusCode::UNAUTHORIZED,
             ApiError::Forbidden(_) => StatusCode::FORBIDDEN,
             ApiError::NotFound(_) => StatusCode::NOT_FOUND,
             ApiError::Internal(_) => StatusCode::INTERNAL_SERVER_ERROR,
@@ -235,6 +231,7 @@ impl ApiError {
     fn message(&self) -> &str {
         match self {
             ApiError::BadRequest(message)
+            | ApiError::Unauthorized(message)
             | ApiError::Forbidden(message)
             | ApiError::NotFound(message)
             | ApiError::Internal(message) => message,
@@ -257,6 +254,7 @@ impl IntoResponse for ApiError {
 
         match status {
             StatusCode::BAD_REQUEST => warn!(error = %message, "Request validation failed"),
+            StatusCode::UNAUTHORIZED => warn!(error = %message, "Authentication failed"),
             StatusCode::FORBIDDEN => warn!(error = %message, "Permission denied"),
             StatusCode::NOT_FOUND => warn!(error = %message, "Resource not found"),
             _ => error!(error = %message, "Unhandled backend error"),
@@ -350,6 +348,7 @@ async fn create_team(
         id: member_id.clone(),
         name: owner_name.clone(),
         joined_at: joined_at.clone(),
+        auth_token: next_auth_token(),
         role: TeamRole::Owner,
         owner: true,
     };
@@ -402,6 +401,7 @@ async fn join_team(
         id: member_id.clone(),
         name: member_name.clone(),
         joined_at,
+        auth_token: next_auth_token(),
         role: TeamRole::Member,
         owner: false,
     };
@@ -424,22 +424,17 @@ async fn join_team(
 
 async fn load_team_context(
     Path(team_code): Path<String>,
-    Query(query): Query<MemberQuery>,
+    headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Result<Json<TeamContextPayload>, ApiError> {
     let code = parse_team_code(&team_code)?;
-    let member_id = normalize_member_id(&query.member_id)?;
     let db = state.db.lock().await;
     let team = db
         .teams
         .iter()
         .find(|team| team.code == code)
         .ok_or_else(|| ApiError::NotFound("Team not found. Check your code and try again.".to_string()))?;
-    let member = team
-        .members
-        .iter()
-        .find(|member| member.id == member_id)
-        .ok_or_else(|| ApiError::Forbidden("You are not a member of this team.".to_string()))?;
+    let member = authenticate_member(team, &headers)?;
 
     let mut members = team
         .members
@@ -460,22 +455,17 @@ async fn load_team_context(
 
 async fn load_team_activity(
     Path(team_code): Path<String>,
-    Query(query): Query<MemberQuery>,
+    headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Result<Json<ActivityPayload>, ApiError> {
     let code = parse_team_code(&team_code)?;
-    let member_id = normalize_member_id(&query.member_id)?;
     let db = state.db.lock().await;
     let team = db
         .teams
         .iter()
         .find(|team| team.code == code)
         .ok_or_else(|| ApiError::NotFound("Team not found. Check your code and try again.".to_string()))?;
-    let member = team
-        .members
-        .iter()
-        .find(|member| member.id == member_id)
-        .ok_or_else(|| ApiError::Forbidden("You are not a member of this team.".to_string()))?;
+    let member = authenticate_member(team, &headers)?;
 
     if member.role != TeamRole::Owner {
         return Err(ApiError::Forbidden(
@@ -490,18 +480,13 @@ async fn load_team_activity(
 
 async fn update_member_role(
     Path((team_code, target_member_id)): Path<(String, String)>,
+    headers: HeaderMap,
     State(state): State<AppState>,
     Json(request): Json<UpdateRoleRequest>,
 ) -> Result<StatusCode, ApiError> {
     let code = parse_team_code(&team_code)?;
-    let actor_id = normalize_member_id(&request.actor_member_id)?;
     let target_id = normalize_member_id(&target_member_id)?;
 
-    if target_id == actor_id {
-        return Err(ApiError::BadRequest(
-            "Owner cannot change their own role.".to_string(),
-        ));
-    }
     if request.role == TeamRole::Owner {
         return Err(ApiError::BadRequest(
             "Setting Owner role via this action is not allowed.".to_string(),
@@ -515,16 +500,17 @@ async fn update_member_role(
         .find(|team| team.code == code)
         .ok_or_else(|| ApiError::NotFound("Team not found. Check your code and try again.".to_string()))?;
 
-    let actor = team
-        .members
-        .iter()
-        .find(|member| member.id == actor_id)
-        .cloned()
-        .ok_or_else(|| ApiError::Forbidden("You are not a member of this team.".to_string()))?;
+    let actor = authenticate_member(team, &headers)?.clone();
 
     if actor.role != TeamRole::Owner {
         return Err(ApiError::Forbidden(
             "Only owner can change member roles.".to_string(),
+        ));
+    }
+
+    if target_id == actor.id {
+        return Err(ApiError::BadRequest(
+            "Owner cannot change their own role.".to_string(),
         ));
     }
 
@@ -561,18 +547,17 @@ async fn update_member_role(
 
 async fn load_todos(
     Path(team_code): Path<String>,
-    Query(query): Query<MemberQuery>,
+    headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Result<Json<TodosPayload>, ApiError> {
     let code = parse_team_code(&team_code)?;
-    let member_id = normalize_member_id(&query.member_id)?;
     let db = state.db.lock().await;
     let team = db
         .teams
         .iter()
         .find(|team| team.code == code)
         .ok_or_else(|| ApiError::NotFound("Team not found. Check your code and try again.".to_string()))?;
-    ensure_member(team, &member_id)?;
+    authenticate_member(team, &headers)?;
 
     Ok(Json(TodosPayload {
         todos: team.todos.clone(),
@@ -581,11 +566,11 @@ async fn load_todos(
 
 async fn save_todos(
     Path(team_code): Path<String>,
+    headers: HeaderMap,
     State(state): State<AppState>,
     Json(payload): Json<SaveTodosRequest>,
 ) -> Result<StatusCode, ApiError> {
     let code = parse_team_code(&team_code)?;
-    let actor_id = normalize_member_id(&payload.member_id)?;
     let mut db = state.db.lock().await;
     let team = db
         .teams
@@ -593,12 +578,7 @@ async fn save_todos(
         .find(|team| team.code == code)
         .ok_or_else(|| ApiError::NotFound("Team not found. Check your code and try again.".to_string()))?;
 
-    let actor = team
-        .members
-        .iter()
-        .find(|member| member.id == actor_id)
-        .cloned()
-        .ok_or_else(|| ApiError::Forbidden("You are not a member of this team.".to_string()))?;
+    let actor = authenticate_member(team, &headers)?.clone();
     let member_names = member_name_map(team);
     let old_todos = team
         .todos
@@ -678,18 +658,17 @@ async fn save_todos(
 
 async fn load_ideas(
     Path(team_code): Path<String>,
-    Query(query): Query<MemberQuery>,
+    headers: HeaderMap,
     State(state): State<AppState>,
 ) -> Result<Json<IdeasPayload>, ApiError> {
     let code = parse_team_code(&team_code)?;
-    let member_id = normalize_member_id(&query.member_id)?;
     let db = state.db.lock().await;
     let team = db
         .teams
         .iter()
         .find(|team| team.code == code)
         .ok_or_else(|| ApiError::NotFound("Team not found. Check your code and try again.".to_string()))?;
-    ensure_member(team, &member_id)?;
+    authenticate_member(team, &headers)?;
 
     Ok(Json(IdeasPayload {
         ideas: team.ideas.clone(),
@@ -698,24 +677,24 @@ async fn load_ideas(
 
 async fn save_ideas(
     Path(team_code): Path<String>,
+    headers: HeaderMap,
     State(state): State<AppState>,
     Json(payload): Json<SaveIdeasRequest>,
 ) -> Result<StatusCode, ApiError> {
     let code = parse_team_code(&team_code)?;
-    let member_id = normalize_member_id(&payload.member_id)?;
     let mut db = state.db.lock().await;
     let team = db
         .teams
         .iter_mut()
         .find(|team| team.code == code)
         .ok_or_else(|| ApiError::NotFound("Team not found. Check your code and try again.".to_string()))?;
-    ensure_member(team, &member_id)?;
+    let actor = authenticate_member(team, &headers)?.clone();
 
     team.ideas = payload.ideas;
     let snapshot = db.clone();
     drop(db);
     persist_database(&state.db_path, &snapshot).await?;
-    info!(team_code = %code, actor_member_id = %member_id, "Saved team ideas");
+    info!(team_code = %code, actor_member_id = %actor.id, "Saved team ideas");
 
     Ok(StatusCode::NO_CONTENT)
 }
@@ -725,17 +704,11 @@ fn build_session(team_code: &str, member: &TeamMember, member_count: usize) -> T
         team_code: team_code.to_string(),
         member_id: member.id.clone(),
         member_name: member.name.clone(),
+        auth_token: member.auth_token.clone(),
         role: member.role.clone(),
         owner: member.role == TeamRole::Owner,
         member_count,
     }
-}
-
-fn ensure_member<'a>(team: &'a TeamRecord, member_id: &str) -> Result<&'a TeamMember, ApiError> {
-    team.members
-        .iter()
-        .find(|member| member.id == member_id)
-        .ok_or_else(|| ApiError::Forbidden("You are not a member of this team.".to_string()))
 }
 
 fn to_member_info(member: &TeamMember) -> TeamMemberInfo {
@@ -761,6 +734,36 @@ fn role_label(role: &TeamRole) -> &'static str {
         TeamRole::Admin => "admin",
         TeamRole::Member => "member",
     }
+}
+
+fn extract_bearer_token(headers: &HeaderMap) -> Result<String, ApiError> {
+    let raw = headers
+        .get(header::AUTHORIZATION)
+        .ok_or_else(|| ApiError::Unauthorized("Missing Authorization header.".to_string()))?
+        .to_str()
+        .map_err(|_| ApiError::Unauthorized("Invalid Authorization header.".to_string()))?;
+
+    let token = raw
+        .strip_prefix("Bearer ")
+        .ok_or_else(|| ApiError::Unauthorized("Authorization must be Bearer token.".to_string()))?
+        .trim();
+
+    if token.is_empty() {
+        return Err(ApiError::Unauthorized(
+            "Empty Bearer token is not allowed.".to_string(),
+        ));
+    }
+
+    Ok(token.to_string())
+}
+
+fn authenticate_member<'a>(team: &'a TeamRecord, headers: &HeaderMap) -> Result<&'a TeamMember, ApiError> {
+    let token = extract_bearer_token(headers)?;
+
+    team.members
+        .iter()
+        .find(|member| member.auth_token == token)
+        .ok_or_else(|| ApiError::Unauthorized("Invalid or expired team session token.".to_string()))
 }
 
 fn can_manage_task(actor: &TeamMember, todo: &TodoItem) -> bool {
@@ -826,6 +829,9 @@ fn normalize_team(team: &mut TeamRecord) {
 
     let mut has_owner = false;
     for member in &mut team.members {
+        if member.auth_token.trim().is_empty() {
+            member.auth_token = next_auth_token();
+        }
         if member.owner {
             member.role = TeamRole::Owner;
         }
@@ -945,6 +951,16 @@ fn next_member_id() -> String {
     let mut rng = rand::thread_rng();
     let suffix: u32 = rng.gen_range(100_000..999_999);
     format!("member-{now}-{suffix}")
+}
+
+fn next_auth_token() -> String {
+    let mut rng = rand::thread_rng();
+    const CHARS: &[u8] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let mut token = String::with_capacity(48);
+    for _ in 0..48 {
+        token.push(CHARS[rng.gen_range(0..CHARS.len())] as char);
+    }
+    token
 }
 
 fn next_activity_id() -> String {

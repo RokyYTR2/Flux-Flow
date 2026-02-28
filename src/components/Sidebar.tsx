@@ -1,5 +1,6 @@
 import { BarChart3, CalendarDays, CheckCheck, Lightbulb, PanelLeftClose, PanelLeftOpen } from 'lucide-react';
 import type { AppView } from '../types/view';
+import appIcon from '../../src-tauri/icons/32x32.png';
 
 interface SidebarProps {
   currentView: AppView;
@@ -20,7 +21,9 @@ const Sidebar = ({ currentView, onViewChange, collapsed, onToggleCollapse, appVe
   return (
     <aside className={`sidebar ${collapsed ? 'collapsed' : ''}`}>
       <div className="sidebar-head">
-        <div className="sidebar-logo-mark">F</div>
+        <div className="sidebar-logo-mark">
+          <img src={appIcon} alt="Flux Flow icon" className="sidebar-logo-icon" />
+        </div>
         {!collapsed && <span className="sidebar-logo-text">Flux Flow</span>}
       </div>
 

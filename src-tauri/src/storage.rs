@@ -70,6 +70,7 @@ pub struct TeamSession {
     pub team_code: String,
     pub member_id: String,
     pub member_name: String,
+    pub auth_token: String,
     pub role: TeamRole,
     pub owner: bool,
     pub member_count: usize,
@@ -118,21 +119,18 @@ struct JoinTeamRequest {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SaveTodosRequest {
-    member_id: String,
     todos: Vec<TodoItem>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct SaveIdeasRequest {
-    member_id: String,
     ideas: Vec<IdeaItem>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct UpdateRoleRequest {
-    actor_member_id: String,
     role: TeamRole,
 }
 
@@ -234,13 +232,17 @@ fn normalize_member_name(value: Option<String>) -> Option<String> {
     }
 }
 
-fn normalize_member_id(value: String) -> Result<String, String> {
+fn normalize_required_value(value: String, label: &str) -> Result<String, String> {
     let trimmed = value.trim();
     if trimmed.is_empty() {
-        Err("Member id is required.".to_string())
+        Err(format!("{label} is required."))
     } else {
         Ok(trimmed.to_string())
     }
+}
+
+fn normalize_auth_token(value: String) -> Result<String, String> {
+    normalize_required_value(value, "Auth token")
 }
 
 fn normalize_team_code(value: &str) -> String {
@@ -367,13 +369,13 @@ pub fn join_team(code: String, display_name: Option<String>) -> Result<TeamSessi
 }
 
 #[tauri::command]
-pub fn load_team_context(team_code: String, member_id: String) -> Result<TeamContext, String> {
+pub fn load_team_context(team_code: String, auth_token: String) -> Result<TeamContext, String> {
     let normalized_code = parse_team_code(&team_code)?;
-    let member_id = normalize_member_id(member_id)?;
+    let auth_token = normalize_auth_token(auth_token)?;
     let client = team_http_client()?;
     let response = client
         .get(team_endpoint(&format!("/api/team/{normalized_code}/context")))
-        .query(&[("memberId", member_id)])
+        .bearer_auth(auth_token)
         .send()
         .map_err(|error| format!("Failed to reach Team backend: {error}"))?;
 
@@ -381,13 +383,13 @@ pub fn load_team_context(team_code: String, member_id: String) -> Result<TeamCon
 }
 
 #[tauri::command]
-pub fn load_team_activity(team_code: String, member_id: String) -> Result<Vec<TeamActivityItem>, String> {
+pub fn load_team_activity(team_code: String, auth_token: String) -> Result<Vec<TeamActivityItem>, String> {
     let normalized_code = parse_team_code(&team_code)?;
-    let member_id = normalize_member_id(member_id)?;
+    let auth_token = normalize_auth_token(auth_token)?;
     let client = team_http_client()?;
     let response = client
         .get(team_endpoint(&format!("/api/team/{normalized_code}/activity")))
-        .query(&[("memberId", member_id)])
+        .bearer_auth(auth_token)
         .send()
         .map_err(|error| format!("Failed to reach Team backend: {error}"))?;
 
@@ -398,19 +400,20 @@ pub fn load_team_activity(team_code: String, member_id: String) -> Result<Vec<Te
 #[tauri::command]
 pub fn update_team_member_role(
     team_code: String,
-    actor_member_id: String,
+    auth_token: String,
     target_member_id: String,
     role: TeamRole,
 ) -> Result<(), String> {
     let normalized_code = parse_team_code(&team_code)?;
-    let actor_member_id = normalize_member_id(actor_member_id)?;
-    let target_member_id = normalize_member_id(target_member_id)?;
+    let auth_token = normalize_auth_token(auth_token)?;
+    let target_member_id = normalize_required_value(target_member_id, "Target member id")?;
     let client = team_http_client()?;
     let response = client
         .put(team_endpoint(&format!(
             "/api/team/{normalized_code}/members/{target_member_id}/role"
         )))
-        .json(&UpdateRoleRequest { actor_member_id, role })
+        .bearer_auth(auth_token)
+        .json(&UpdateRoleRequest { role })
         .send()
         .map_err(|error| format!("Failed to reach Team backend: {error}"))?;
 
@@ -418,13 +421,13 @@ pub fn update_team_member_role(
 }
 
 #[tauri::command]
-pub fn load_team_todos(team_code: String, member_id: String) -> Result<Vec<TodoItem>, String> {
+pub fn load_team_todos(team_code: String, auth_token: String) -> Result<Vec<TodoItem>, String> {
     let normalized_code = parse_team_code(&team_code)?;
-    let member_id = normalize_member_id(member_id)?;
+    let auth_token = normalize_auth_token(auth_token)?;
     let client = team_http_client()?;
     let response = client
         .get(team_endpoint(&format!("/api/team/{normalized_code}/todos")))
-        .query(&[("memberId", member_id)])
+        .bearer_auth(auth_token)
         .send()
         .map_err(|error| format!("Failed to reach Team backend: {error}"))?;
 
@@ -433,13 +436,14 @@ pub fn load_team_todos(team_code: String, member_id: String) -> Result<Vec<TodoI
 }
 
 #[tauri::command]
-pub fn save_team_todos(team_code: String, member_id: String, todos: Vec<TodoItem>) -> Result<(), String> {
+pub fn save_team_todos(team_code: String, auth_token: String, todos: Vec<TodoItem>) -> Result<(), String> {
     let normalized_code = parse_team_code(&team_code)?;
-    let member_id = normalize_member_id(member_id)?;
+    let auth_token = normalize_auth_token(auth_token)?;
     let client = team_http_client()?;
     let response = client
         .put(team_endpoint(&format!("/api/team/{normalized_code}/todos")))
-        .json(&SaveTodosRequest { member_id, todos })
+        .bearer_auth(auth_token)
+        .json(&SaveTodosRequest { todos })
         .send()
         .map_err(|error| format!("Failed to reach Team backend: {error}"))?;
 
@@ -447,13 +451,13 @@ pub fn save_team_todos(team_code: String, member_id: String, todos: Vec<TodoItem
 }
 
 #[tauri::command]
-pub fn load_team_ideas(team_code: String, member_id: String) -> Result<Vec<IdeaItem>, String> {
+pub fn load_team_ideas(team_code: String, auth_token: String) -> Result<Vec<IdeaItem>, String> {
     let normalized_code = parse_team_code(&team_code)?;
-    let member_id = normalize_member_id(member_id)?;
+    let auth_token = normalize_auth_token(auth_token)?;
     let client = team_http_client()?;
     let response = client
         .get(team_endpoint(&format!("/api/team/{normalized_code}/ideas")))
-        .query(&[("memberId", member_id)])
+        .bearer_auth(auth_token)
         .send()
         .map_err(|error| format!("Failed to reach Team backend: {error}"))?;
 
@@ -462,13 +466,14 @@ pub fn load_team_ideas(team_code: String, member_id: String) -> Result<Vec<IdeaI
 }
 
 #[tauri::command]
-pub fn save_team_ideas(team_code: String, member_id: String, ideas: Vec<IdeaItem>) -> Result<(), String> {
+pub fn save_team_ideas(team_code: String, auth_token: String, ideas: Vec<IdeaItem>) -> Result<(), String> {
     let normalized_code = parse_team_code(&team_code)?;
-    let member_id = normalize_member_id(member_id)?;
+    let auth_token = normalize_auth_token(auth_token)?;
     let client = team_http_client()?;
     let response = client
         .put(team_endpoint(&format!("/api/team/{normalized_code}/ideas")))
-        .json(&SaveIdeasRequest { member_id, ideas })
+        .bearer_auth(auth_token)
+        .json(&SaveIdeasRequest { ideas })
         .send()
         .map_err(|error| format!("Failed to reach Team backend: {error}"))?;
 
