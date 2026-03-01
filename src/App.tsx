@@ -99,6 +99,46 @@ const formatDateTime = (value: string | null) => {
   });
 };
 
+const parseTimestamp = (value: unknown): Date | null => {
+  if (value === null || value === undefined) return null;
+
+  if (value instanceof Date) {
+    return Number.isNaN(value.getTime()) ? null : value;
+  }
+
+  if (typeof value === 'number') {
+    if (!Number.isFinite(value)) return null;
+    const timestamp = Math.abs(value) < 1e12 ? value * 1000 : value;
+    const date = new Date(timestamp);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  if (typeof value === 'string') {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+
+    const numeric = Number(trimmed.replace(',', '.'));
+    if (Number.isFinite(numeric) && /^[-+]?\d+([.,]\d+)?$/.test(trimmed)) {
+      const timestamp = Math.abs(numeric) < 1e12 ? numeric * 1000 : numeric;
+      const date = new Date(timestamp);
+      return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    const date = new Date(trimmed);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  return null;
+};
+
+const formatUiDate = (value: unknown) => {
+  const parsed = parseTimestamp(value);
+  if (!parsed) return 'Unknown time';
+
+  const label = parsed.toLocaleString();
+  return label === 'Invalid Date' ? 'Unknown time' : label;
+};
+
 const toIsoOrNull = (value: string) => {
   if (!value.trim()) return null;
 
@@ -906,7 +946,7 @@ const AppContent = () => {
                         <h3 className="team-member-name">
                           {member.name} {member.id === teamSession.memberId ? '(You)' : ''}
                         </h3>
-                        <p className="team-member-meta">Joined: {new Date(member.joinedAt).toLocaleString()}</p>
+                        <p className="team-member-meta">Joined: {formatUiDate(member.joinedAt)}</p>
                       </div>
                       {teamSession.role === 'owner' && member.role !== 'owner' ? (
                         <div className="team-role-select">
@@ -957,7 +997,7 @@ const AppContent = () => {
                       <div className="team-activity-item" key={item.id}>
                         <div className="team-activity-top">
                           <strong>{item.actorMemberName}</strong>
-                          <span>{new Date(item.createdAt).toLocaleString()}</span>
+                          <span>{formatUiDate(item.createdAt)}</span>
                         </div>
                         <p>{item.details}</p>
                       </div>
