@@ -14,6 +14,12 @@ const IDEAS_FILE_NAME: &str = "ideas.json";
 const TEAM_BACKEND_DEFAULT_URL: &str = "http://157.173.124.239:25578";
 const TEAM_BACKEND_URL_ENV: &str = "FLUX_FLOW_TEAM_BACKEND_URL";
 const TEAM_HTTP_TIMEOUT_SECS: u64 = 15;
+const MAX_TITLE_LEN: usize = 500;
+const MAX_DESCRIPTION_LEN: usize = 10_000;
+const MAX_CONTENT_LEN: usize = 50_000;
+const MAX_TAG_LEN: usize = 100;
+const MAX_TAGS_COUNT: usize = 50;
+const MAX_ITEMS_COUNT: usize = 10_000;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
@@ -211,9 +217,17 @@ fn team_endpoint(path: &str) -> String {
     format!("{}{}", team_backend_base_url(), path)
 }
 
+fn team_http_timeout() -> Duration {
+    let secs = env::var("FLUX_FLOW_TEAM_HTTP_TIMEOUT")
+        .ok()
+        .and_then(|v| v.trim().parse::<u64>().ok())
+        .unwrap_or(TEAM_HTTP_TIMEOUT_SECS);
+    Duration::from_secs(secs)
+}
+
 fn team_http_client() -> Result<Client, String> {
     Client::builder()
-        .timeout(Duration::from_secs(TEAM_HTTP_TIMEOUT_SECS))
+        .timeout(team_http_timeout())
         .build()
         .map_err(|error| format!("Failed to initialize HTTP client: {error}"))
 }
@@ -230,6 +244,73 @@ fn normalize_member_name(value: Option<String>) -> Option<String> {
         }
         None => None,
     }
+}
+
+fn sanitize_path_segment(value: &str, label: &str) -> Result<String, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Err(format!("{label} is required."));
+    }
+    if trimmed.contains('/') || trimmed.contains('\\') || trimmed.contains("..") || trimmed.contains('\0') {
+        return Err(format!("{label} contains invalid characters."));
+    }
+    Ok(trimmed.to_string())
+}
+
+fn validate_todo(todo: &TodoItem) -> Result<(), String> {
+    if todo.title.len() > MAX_TITLE_LEN {
+        return Err(format!("Todo title exceeds maximum length of {MAX_TITLE_LEN} characters."));
+    }
+    if todo.description.len() > MAX_DESCRIPTION_LEN {
+        return Err(format!("Todo description exceeds maximum length of {MAX_DESCRIPTION_LEN} characters."));
+    }
+    if todo.tags.len() > MAX_TAGS_COUNT {
+        return Err(format!("Too many tags (max {MAX_TAGS_COUNT})."));
+    }
+    for tag in &todo.tags {
+        if tag.len() > MAX_TAG_LEN {
+            return Err(format!("Tag exceeds maximum length of {MAX_TAG_LEN} characters."));
+        }
+    }
+    Ok(())
+}
+
+fn validate_idea(idea: &IdeaItem) -> Result<(), String> {
+    if idea.title.len() > MAX_TITLE_LEN {
+        return Err(format!("Idea title exceeds maximum length of {MAX_TITLE_LEN} characters."));
+    }
+    if idea.content.len() > MAX_CONTENT_LEN {
+        return Err(format!("Idea content exceeds maximum length of {MAX_CONTENT_LEN} characters."));
+    }
+    if idea.tags.len() > MAX_TAGS_COUNT {
+        return Err(format!("Too many tags (max {MAX_TAGS_COUNT})."));
+    }
+    for tag in &idea.tags {
+        if tag.len() > MAX_TAG_LEN {
+            return Err(format!("Tag exceeds maximum length of {MAX_TAG_LEN} characters."));
+        }
+    }
+    Ok(())
+}
+
+fn validate_todos(todos: &[TodoItem]) -> Result<(), String> {
+    if todos.len() > MAX_ITEMS_COUNT {
+        return Err(format!("Too many todos (max {MAX_ITEMS_COUNT})."));
+    }
+    for todo in todos {
+        validate_todo(todo)?;
+    }
+    Ok(())
+}
+
+fn validate_ideas(ideas: &[IdeaItem]) -> Result<(), String> {
+    if ideas.len() > MAX_ITEMS_COUNT {
+        return Err(format!("Too many ideas (max {MAX_ITEMS_COUNT})."));
+    }
+    for idea in ideas {
+        validate_idea(idea)?;
+    }
+    Ok(())
 }
 
 fn normalize_required_value(value: String, label: &str) -> Result<String, String> {
@@ -319,6 +400,7 @@ pub fn load_todos() -> Result<Vec<TodoItem>, String> {
 
 #[tauri::command]
 pub fn save_todos(todos: Vec<TodoItem>) -> Result<(), String> {
+    validate_todos(&todos)?;
     let dir = storage_dir()?;
     let path = dir.join(TODOS_FILE_NAME);
     write_json(&path, &todos)
@@ -333,6 +415,7 @@ pub fn load_ideas() -> Result<Vec<IdeaItem>, String> {
 
 #[tauri::command]
 pub fn save_ideas(ideas: Vec<IdeaItem>) -> Result<(), String> {
+    validate_ideas(&ideas)?;
     let dir = storage_dir()?;
     let path = dir.join(IDEAS_FILE_NAME);
     write_json(&path, &ideas)
@@ -406,7 +489,7 @@ pub fn update_team_member_role(
 ) -> Result<(), String> {
     let normalized_code = parse_team_code(&team_code)?;
     let auth_token = normalize_auth_token(auth_token)?;
-    let target_member_id = normalize_required_value(target_member_id, "Target member id")?;
+    let target_member_id = sanitize_path_segment(&target_member_id, "Target member id")?;
     let client = team_http_client()?;
     let response = client
         .put(team_endpoint(&format!(
@@ -437,6 +520,7 @@ pub fn load_team_todos(team_code: String, auth_token: String) -> Result<Vec<Todo
 
 #[tauri::command]
 pub fn save_team_todos(team_code: String, auth_token: String, todos: Vec<TodoItem>) -> Result<(), String> {
+    validate_todos(&todos)?;
     let normalized_code = parse_team_code(&team_code)?;
     let auth_token = normalize_auth_token(auth_token)?;
     let client = team_http_client()?;
@@ -467,6 +551,7 @@ pub fn load_team_ideas(team_code: String, auth_token: String) -> Result<Vec<Idea
 
 #[tauri::command]
 pub fn save_team_ideas(team_code: String, auth_token: String, ideas: Vec<IdeaItem>) -> Result<(), String> {
+    validate_ideas(&ideas)?;
     let normalized_code = parse_team_code(&team_code)?;
     let auth_token = normalize_auth_token(auth_token)?;
     let client = team_http_client()?;
