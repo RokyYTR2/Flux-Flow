@@ -5,7 +5,7 @@ use std::collections::{HashMap, HashSet};
 use std::net::SocketAddr;
 use tracing::info;
 
-use crate::db::persist_database;
+use crate::db::persist_team;
 use crate::error::ApiError;
 use crate::helpers::*;
 use crate::models::*;
@@ -50,11 +50,10 @@ pub async fn create_team(
         "team_created",
         format!("Created team {}", team_code),
     );
+    let team_snapshot = team.clone();
     db.teams.push(team);
-
-    let snapshot = db.clone();
     drop(db);
-    persist_database(&state.db_path, &snapshot).await?;
+    persist_team(&*state.conn.lock().await, &team_snapshot)?;
     info!(team_code = %team_code, owner = %owner_name, "Created team");
 
     Ok(Json(build_session(&team_code, &owner_member, 1)))
@@ -95,9 +94,9 @@ pub async fn join_team(
         format!("{} joined the team", member.name),
     );
 
-    let snapshot = db.clone();
+    let team_snapshot = team.clone();
     drop(db);
-    persist_database(&state.db_path, &snapshot).await?;
+    persist_team(&*state.conn.lock().await, &team_snapshot)?;
     info!(team_code = %code, member = %member_name, member_count, "Joined team");
 
     Ok(Json(build_session(&code, &member, member_count)))
@@ -212,9 +211,9 @@ pub async fn update_member_role(
     let details = format!("{} role changed to {}", target.name, role_label(&target.role));
     push_activity(team, &actor, "role_updated", details);
 
-    let snapshot = db.clone();
+    let team_snapshot = team.clone();
     drop(db);
-    persist_database(&state.db_path, &snapshot).await?;
+    persist_team(&*state.conn.lock().await, &team_snapshot)?;
     info!(
         team_code = %code,
         actor_member_id = %actor.id,
@@ -329,9 +328,9 @@ pub async fn save_todos(
         push_activity(team, &actor, &action, details);
     }
 
-    let snapshot = db.clone();
+    let team_snapshot = team.clone();
     drop(db);
-    persist_database(&state.db_path, &snapshot).await?;
+    persist_team(&*state.conn.lock().await, &team_snapshot)?;
     info!(team_code = %code, actor_member_id = %actor.id, "Saved team todos");
 
     Ok(StatusCode::NO_CONTENT)
@@ -372,9 +371,9 @@ pub async fn save_ideas(
     let actor = authenticate_member(team, &headers)?.clone();
 
     team.ideas = payload.ideas;
-    let snapshot = db.clone();
+    let team_snapshot = team.clone();
     drop(db);
-    persist_database(&state.db_path, &snapshot).await?;
+    persist_team(&*state.conn.lock().await, &team_snapshot)?;
     info!(team_code = %code, actor_member_id = %actor.id, "Saved team ideas");
 
     Ok(StatusCode::NO_CONTENT)

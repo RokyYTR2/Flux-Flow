@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::net::IpAddr;
-use std::path::PathBuf;
 use std::sync::Arc;
+
+use rusqlite::Connection;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
 use tracing::warn;
@@ -63,7 +64,7 @@ impl RateLimiter {
 
 #[derive(Clone)]
 pub struct AppState {
-    pub db_path: PathBuf,
+    pub conn: Arc<Mutex<Connection>>,
     pub db: Arc<Mutex<TeamDatabase>>,
     pub join_limiter: Arc<Mutex<RateLimiter>>,
     pub create_limiter: Arc<Mutex<RateLimiter>>,

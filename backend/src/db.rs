@@ -1,40 +1,62 @@
 use std::path::Path;
 
+use rusqlite::Connection;
+
 use crate::error::ApiError;
 use crate::helpers::*;
 use crate::models::*;
 
-pub async fn load_database(path: &Path) -> Result<TeamDatabase, ApiError> {
-    if !path.exists() {
-        return Ok(TeamDatabase::default());
-    }
-
-    let raw = tokio::fs::read_to_string(path)
-        .await
-        .map_err(|err| ApiError::Internal(format!("Failed to read database: {err}")))?;
-
-    if raw.trim().is_empty() {
-        return Ok(TeamDatabase::default());
-    }
-
-    serde_json::from_str::<TeamDatabase>(&raw)
-        .map_err(|err| ApiError::Internal(format!("Failed to parse database: {err}")))
-}
-
-pub async fn persist_database(path: &Path, db: &TeamDatabase) -> Result<(), ApiError> {
+pub fn open_database(path: &Path) -> Result<Connection, ApiError> {
     if let Some(parent) = path.parent() {
         if !parent.as_os_str().is_empty() {
-            tokio::fs::create_dir_all(parent)
-                .await
+            std::fs::create_dir_all(parent)
                 .map_err(|err| ApiError::Internal(format!("Failed to create DB folder: {err}")))?;
         }
     }
 
-    let payload = serde_json::to_vec_pretty(db)
-        .map_err(|err| ApiError::Internal(format!("Failed to serialize database: {err}")))?;
-    tokio::fs::write(path, payload)
-        .await
-        .map_err(|err| ApiError::Internal(format!("Failed to write database: {err}")))?;
+    let conn = Connection::open(path)
+        .map_err(|err| ApiError::Internal(format!("Failed to open database: {err}")))?;
+    conn.pragma_update(None, "journal_mode", "WAL")
+        .map_err(|err| ApiError::Internal(format!("Failed to enable WAL: {err}")))?;
+    conn.pragma_update(None, "synchronous", "NORMAL")
+        .map_err(|err| ApiError::Internal(format!("Failed to set synchronous: {err}")))?;
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS teams (code TEXT PRIMARY KEY, data TEXT NOT NULL)",
+        [],
+    )
+    .map_err(|err| ApiError::Internal(format!("Failed to create schema: {err}")))?;
+
+    Ok(conn)
+}
+
+pub fn load_database(conn: &Connection) -> Result<TeamDatabase, ApiError> {
+    let mut stmt = conn
+        .prepare("SELECT data FROM teams")
+        .map_err(|err| ApiError::Internal(format!("Failed to query teams: {err}")))?;
+    let rows = stmt
+        .query_map([], |row| row.get::<_, String>(0))
+        .map_err(|err| ApiError::Internal(format!("Failed to read teams: {err}")))?;
+
+    let mut teams = Vec::new();
+    for row in rows {
+        let raw = row.map_err(|err| ApiError::Internal(format!("Failed to read team row: {err}")))?;
+        let team = serde_json::from_str::<TeamRecord>(&raw)
+            .map_err(|err| ApiError::Internal(format!("Failed to parse team record: {err}")))?;
+        teams.push(team);
+    }
+
+    Ok(TeamDatabase { teams })
+}
+
+pub fn persist_team(conn: &Connection, team: &TeamRecord) -> Result<(), ApiError> {
+    let payload = serde_json::to_string(team)
+        .map_err(|err| ApiError::Internal(format!("Failed to serialize team: {err}")))?;
+    conn.execute(
+        "INSERT INTO teams (code, data) VALUES (?1, ?2)
+         ON CONFLICT(code) DO UPDATE SET data = excluded.data",
+        rusqlite::params![team.code, payload],
+    )
+    .map_err(|err| ApiError::Internal(format!("Failed to persist team: {err}")))?;
 
     Ok(())
 }

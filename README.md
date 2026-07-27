@@ -17,6 +17,8 @@ Desktop productivity app built with **Tauri + React + Rust** for managing TODOs 
 - Team create/join by code
 - Session token authentication for Team API (Bearer token)
 - Team roles: **Owner / Admin / Member**
+- System tray icon — closing the window hides the app to the tray, reminders keep firing; quit via tray menu
+- Native OS notifications for reminders and due tasks
 - Task assignee support in team mode
 - Owner-only activity feed
 
@@ -84,7 +86,9 @@ npm run tauri:build
 Backend env vars:
 
 - `FLUX_FLOW_TEAM_BIND_ADDR` (default: `0.0.0.0:25578`)
-- `FLUX_FLOW_TEAM_DB_PATH` (default: `backend.json`)
+- `FLUX_FLOW_TEAM_DB_PATH` (default: `backend.db`, SQLite)
+
+The backend stores data in SQLite (WAL mode).
 
 Tauri Team backend URL env var:
 

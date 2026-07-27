@@ -17,12 +17,12 @@ use tower_http::trace::TraceLayer;
 use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-use crate::db::{load_database, normalize_database};
+use crate::db::{load_database, normalize_database, open_database};
 use crate::models::TeamDatabase;
 use crate::state::{AppState, RateLimiter};
 
 const DEFAULT_BIND_ADDR: &str = "0.0.0.0:25578";
-const DEFAULT_DB_PATH: &str = "backend.json";
+const DEFAULT_DB_PATH: &str = "backend.db";
 
 #[tokio::main]
 async fn main() {
@@ -31,7 +31,9 @@ async fn main() {
     let bind_addr = std::env::var("FLUX_FLOW_TEAM_BIND_ADDR").unwrap_or_else(|_| DEFAULT_BIND_ADDR.to_string());
     let db_path = std::env::var("FLUX_FLOW_TEAM_DB_PATH").unwrap_or_else(|_| DEFAULT_DB_PATH.to_string());
     let db_path = PathBuf::from(db_path);
-    let mut database = match load_database(&db_path).await {
+    let conn = open_database(&db_path).expect("failed to open SQLite database");
+
+    let mut database = match load_database(&conn) {
         Ok(database) => database,
         Err(error) => {
             warn!(error = %error, "Failed to load database, starting with empty state");
@@ -41,7 +43,7 @@ async fn main() {
     normalize_database(&mut database);
 
     let state = AppState {
-        db_path,
+        conn: Arc::new(Mutex::new(conn)),
         db: Arc::new(Mutex::new(database)),
         join_limiter: Arc::new(Mutex::new(RateLimiter::new())),
         create_limiter: Arc::new(Mutex::new(RateLimiter::new())),

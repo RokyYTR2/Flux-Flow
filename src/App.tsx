@@ -1,5 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { invoke } from '@tauri-apps/api/core';
+import {
+  isPermissionGranted as isTauriNotificationGranted,
+  requestPermission as requestTauriNotificationPermission,
+  sendNotification as sendTauriNotification,
+} from '@tauri-apps/plugin-notification';
 import { Copy, LogOut, UserRound, Users } from 'lucide-react';
 import CalendarView from './components/Calendar/CalendarView';
 import DashboardView from './components/Dashboard/DashboardView';
@@ -207,7 +212,22 @@ const requestNotificationPermission = async () => {
   }
 };
 
+const isTauriRuntime = () => typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window;
+
 const sendSystemNotification = async (title: string, body: string) => {
+  if (isTauriRuntime()) {
+    try {
+      let granted = await isTauriNotificationGranted();
+      if (!granted) {
+        granted = (await requestTauriNotificationPermission()) === 'granted';
+      }
+      if (granted) {
+        sendTauriNotification({ title, body });
+      }
+      return;
+    } catch {}
+  }
+
   if (typeof window === 'undefined' || !('Notification' in window)) {
     return;
   }
